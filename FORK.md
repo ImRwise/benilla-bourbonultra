@@ -144,6 +144,21 @@ MCNK liquid layers draw as cells of 4×4 chunks instead of one draw per chunk.
   - lightning in heavy rain, and soft procedural mist;
   - rain streaks that shrink toward the eye;
   - precipitation drawn as points built in the vertex stage.
+- **Weather that sticks to units:** each player, NPC, creature, pet and mount, with everything it
+  wears or carries, has a coat of its own (`weather/coat`), not the ground's wetness.
+  - Rain soaks a unit in about 20 s of full rain (the ground takes 90 s), deep water soaks it in
+    2 s, and it dries over about 2 min once it is under cover or the rain stops; running dries it
+    faster.
+  - Snow settles on up-facing surfaces (shoulders, hats, saddles, backs) of a unit that stands
+    still, builds slowly on a walker, is shaken off at a run, is washed by rain and drowned by deep
+    water, and melts indoors into a damp coat.
+  - A unit that streams in starts from the zone's wetness and snow cover (`ZoneSnow`, the `snow`
+    row of the environment block), so nothing visibly soaks as it comes into view.
+  - Roofs come from the rain-shelter grid (which snow now also keeps live) and, beyond it, from the
+    interior classifier. It rides the existing `rainSurfaces` cvar and its capture knobs, plus
+    `WOW_SNOWPACK`, `WOW_COAT_WET` and `WOW_COAT_SNOW`.
+  - Deviation: the shared light buffer gains a per-slot coat table between the straddle clip table
+    and the palette rows (`wow_model.wgsl`, `velocity.wgsl` and `entity_shadow.wgsl` mirror it).
 - **Fixes:** a BLP mip chain ends at the last complete level (black rain streaks); a zero-duration
   global sequence holds its first key; the ghost sky's DeathClouds spin.
 

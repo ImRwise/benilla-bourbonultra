@@ -8,13 +8,14 @@
 //!   dries after it stops (about 4 min from soaked). It runs on real time, like the channels.
 //! - `ripple_time_s` is the rain-ripple clock (wraps every [`RIPPLE_WRAP_S`] s; the shader's ring
 //!   rates are chosen so the wrap is seamless).
-//! - `snow` is reserved (0).
+//! - `snow` is the zone's snow cover ([`super::coat::ZoneSnow`]): it builds while it snows and
+//!   melts after, as the wetness does, and a unit that streams in starts from it.
 //!
 //! The `rainSurfaces` cvar ([`RainSurfaces`]) gates the whole row: off writes zeros, and every
 //! shader reader treats a zero row as "dry", so the image is unchanged.
 //!
 //! Capture knobs: `WOW_RAIN_SURFACES=0|1` overrides the cvar; `WOW_WETNESS=<0..1>` pins the
-//! wetness (a capture cannot wait minutes for the ramp); `WOW_WET_T=<s>` pins the ripple clock;
+//! wetness (a capture cannot wait minutes for the ramp); `WOW_SNOWPACK=<0..1>` pins the snow cover; `WOW_WET_T=<s>` pins the ripple clock;
 //! `WOW_WET_SSR=0` turns the screen-space reflection off (the sky colour stands in for it).
 
 use bevy::prelude::*;
@@ -75,6 +76,7 @@ fn env_f32(key: &str) -> Option<f32> {
 struct EnvOverrides {
     on: Option<bool>,
     wetness: Option<f32>,
+    snow: Option<f32>,
     ripple_t: Option<f32>,
     ssr: Option<bool>,
 }
@@ -84,9 +86,15 @@ fn env_overrides() -> &'static EnvOverrides {
     ENV.get_or_init(|| EnvOverrides {
         on: env_f32("WOW_RAIN_SURFACES").map(|v| v >= 0.5),
         wetness: env_f32("WOW_WETNESS").map(|v| v.clamp(0.0, 1.0)),
+        snow: env_f32("WOW_SNOWPACK").map(|v| v.clamp(0.0, 1.0)),
         ripple_t: env_f32("WOW_WET_T"),
         ssr: env_f32("WOW_WET_SSR").map(|v| v >= 0.5),
     })
+}
+
+/// Whether the surface-weather look is on this session: the capture override, else the cvar.
+pub(super) fn enabled(cvar: &RainSurfaces) -> bool {
+    env_overrides().on.unwrap_or(cvar.0)
 }
 
 pub(super) fn wetness_tick(
@@ -94,6 +102,7 @@ pub(super) fn wetness_tick(
     state: Res<WeatherState>,
     cvar: Res<RainSurfaces>,
     mut wet: ResMut<Wetness>,
+    mut zone_snow: ResMut<super::coat::ZoneSnow>,
     mut frame: ResMut<EnvFrame>,
 ) {
     let env = env_overrides();
@@ -103,7 +112,18 @@ pub(super) fn wetness_tick(
         0.0
     };
     wet.step(rain, time.delta_secs());
+    let snowfall = if state.effect_kind == WeatherKind::Snow {
+        state.effect_density.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    zone_snow.0.step(snowfall, time.delta_secs());
     let on = env.on.unwrap_or(cvar.0);
+    let snow = if on {
+        env.snow.unwrap_or(zone_snow.0.cover)
+    } else {
+        0.0
+    };
     let (rate, wetness, ripple) = if on {
         (
             rain,
@@ -127,11 +147,12 @@ pub(super) fn wetness_tick(
         || frame.wetness != wetness
         || frame.ripple_time_s != ripple
         || frame.wet_ssr != ssr
+        || frame.snow != snow
     {
         frame.rain_rate = rate;
         frame.wetness = wetness;
         frame.ripple_time_s = ripple;
-        frame.snow = 0.0;
+        frame.snow = snow;
         frame.wet_ssr = ssr;
     }
 }

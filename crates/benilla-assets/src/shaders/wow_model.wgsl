@@ -145,6 +145,9 @@ struct WowLight {
     // Per rig slot, the straddle waterline (size mirrored in straddle.rs): x = its world height
     // (Bevy Y), y = the side the near copy keeps (+1 above, −1 below, 0 not straddling).
     water_clip: array<vec2<f32>, 2048>,
+    // fork: per rig slot, the unit's weather coat (`weather::coat`, `wet_hook::coat_decode`): bit 31
+    // = the coat owns the slot, bits 8..15 snow, bits 0..7 wet; 0 = the zone-wide wet look.
+    rig_coat: array<u32, 2048>,
     palettes: array<vec4<f32>>,
 };
 @group(#{MATERIAL_BIND_GROUP}) @binding(90) var<storage, read> wow_light: WowLight;
@@ -1456,10 +1459,14 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
         rgb = stage1_rgb(stage1_preset, rgb, tex1, obj_fade);
     }
 
+    // fork: weather that sticks to units (`weather::coat`). A rig slot whose coat word is owned
+    // takes its wetness and snow from its unit's own coat, which already accounts for roofs, so it
+    // skips the zone-wide wet look and the shelter taps below. Slot 0 (statics) reads word 0.
+    let unit_coat = wet_hook::coat_decode(wow_light.rig_coat[(fade_tag >> 19u) & 0x7ffu]);
     // fork: rain on surfaces (`benilla::wet_hook`). Nothing gets wet under a roof, a porch or a
     // bridge: the shelter grid's open share, read only while something is wet.
     var wet_open = 1.0;
-    if (wow_light.env.wet_a.y > 0.0) {
+    if (!unit_coat.managed && wow_light.env.wet_a.y > 0.0) {
         let wet_st = wet_hook::shelter_taps(in.world_position.xyz, wow_light.shelter_hdr,
             wow_light.shelter_cfg);
         if (wet_st.live > 0.0) {
@@ -1472,9 +1479,26 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     // `rgb` untouched. A booth's own light blob carries a zero row, so it never gets wet.
     let wet_dry = is_interior || interior_fogged || is_rig || is_emissive || is_mod || is_mod2x
         || (u32(m.clutter_fade.z) & 4u) != 0u;
-    let wet = wet_hook::wet_surface(rgb, n_lit, in.world_position.xyz,
-        select(1.0, 0.0, wet_dry) * wet_open, wow_light.env);
+    var wet = wet_hook::wet_surface(rgb, n_lit, in.world_position.xyz,
+        select(1.0, 0.0, wet_dry || unit_coat.managed) * wet_open, wow_light.env);
+    if (unit_coat.managed) {
+        wet = wet_hook::coat_wet(rgb, n_lit, unit_coat.wet, select(1.0, 0.0, wet_dry));
+    }
     rgb = wet.albedo;
+    // Snow settles on up-facing surfaces of the unit and what it wears, lit like the surface it
+    // lies on, and covers the wet gloss it lies over.
+    if (unit_coat.managed && unit_coat.snow > 0.0 && !wet_dry) {
+#ifdef VERTEX_UVS_A
+        let snow_uv = in.uv;
+#else
+        let snow_uv = in.world_position.xz * 0.5;
+#endif
+        let snow_cover = wet_hook::coat_snow_cover(n_lit, snow_uv, unit_coat.snow);
+        let snow_light = clamp(inst_tint * (lit_with_shadow + point_diffuse) + sidn_e,
+            vec3<f32>(0.0), vec3<f32>(1.0));
+        rgb = mix(rgb, wet_hook::coat_snow_color(snow_light), snow_cover);
+        wet.boost = wet.boost * (1.0 - snow_cover);
+    }
     if (wet.boost > 0.0) {
         rgb = min(rgb + wet_hook::wet_sheen(wet.boost, n_lit,
             normalize(view.world_position - in.world_position.xyz), L,

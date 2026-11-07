@@ -29,6 +29,7 @@ struct SkinRegions {
     rig_origin: array<vec4<f32>, 2048>,
     _matanim: array<vec4<f32>, 2048>,
     _water_clip: array<vec2<f32>, 2048>,
+    _rig_coat: array<u32, 2048>,
     palettes: array<vec4<f32>>,
 }
 @group(1) @binding(1) var<storage, read> skin: SkinRegions;

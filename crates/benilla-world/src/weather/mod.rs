@@ -15,6 +15,7 @@ use bevy::prelude::*;
 
 use crate::dev_state::DebugState;
 
+pub mod coat;
 mod precip;
 pub(crate) use precip::WeatherIndoors;
 pub mod shelter;
@@ -318,6 +319,8 @@ impl Plugin for WeatherPlugin {
         // fork: rain on surfaces (FORK.md).
         wetness::register(app);
         shelter::register(app);
+        // fork: weather that sticks to units (FORK.md); after the shelter grid it reads.
+        coat::register(app);
         wet_ssr::register(app);
     }
 }

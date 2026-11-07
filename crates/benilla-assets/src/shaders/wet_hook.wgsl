@@ -189,3 +189,58 @@ fn wet_sheen(boost: f32, n: vec3<f32>, to_view: vec3<f32>, to_light: vec3<f32>,
     return wet_sun(boost, n, to_view, to_light, sun_rgb, shadow, MODEL_SUN_GAIN)
         + sky_rgb * (MODEL_SKY_GAIN * wet_reflectance(boost, n, to_view));
 }
+
+// fork: weather that sticks to units (`benilla-world/src/weather/coat`). A unit's own wetness and
+// snow cover, one word a rig slot: bit 31 = the coat owns the slot (a dry unit is owned too, so the
+// zone's wetness never wets a unit under a roof), bits 8..15 snow, bits 0..7 wet. Word 0 = unowned.
+struct UnitCoat {
+    managed: bool,
+    wet: f32,
+    snow: f32,
+}
+
+fn coat_decode(word: u32) -> UnitCoat {
+    var c: UnitCoat;
+    c.managed = (word & 0x80000000u) != 0u;
+    c.wet = f32(word & 0xffu) * (1.0 / 255.0);
+    c.snow = f32((word >> 8u) & 0xffu) * (1.0 / 255.0);
+    return c;
+}
+
+// The wet look of a unit: `wet_surface`'s darkening and gloss at the unit's own wetness. Rain
+// falls from above, so a drizzled unit is wet on its tops, but a soaked one is wet all over: the
+// facing term rises to 1 with the square of the wetness, so a swimmer's undersides darken too.
+fn coat_wet(albedo: vec3<f32>, n: vec3<f32>, wet: f32, exposure: f32) -> WetSurface {
+    var o: WetSurface;
+    o.albedo = albedo;
+    o.boost = 0.0;
+    if (wet <= 0.0 || exposure <= 0.0) {
+        return o;
+    }
+    let facing = smoothstep(-0.2, 0.25, n.y) * mix(0.5, 1.0, smoothstep(0.3, 0.8, n.y));
+    let w = clamp(wet, 0.0, 1.0) * clamp(exposure, 0.0, 1.0) * mix(facing, 1.0, wet * wet);
+    let luma = dot(albedo, vec3<f32>(0.299, 0.587, 0.114));
+    let sat = max(mix(vec3<f32>(luma), albedo, 1.0 + 0.3 * w), vec3<f32>(0.0));
+    o.albedo = sat * (1.0 - 0.36 * w);
+    o.boost = w * mix(smoothstep(0.35, 0.9, n.y), 0.6, wet * wet);
+    return o;
+}
+
+// How much of a surface the snow covers: up-facing first, climbing the sides as the cover
+// thickens, with a ragged edge from texture-space noise (stable on the model as it moves).
+fn coat_snow_cover(n: vec3<f32>, uv: vec2<f32>, snow: f32) -> f32 {
+    if (snow <= 0.0) {
+        return 0.0;
+    }
+    let s = clamp(snow, 0.0, 1.0);
+    let edge = mix(0.8, -0.1, s);
+    let breakup = (wet_noise(uv * 23.0) - 0.5) * 0.4;
+    return smoothstep(edge, edge + 0.2, n.y + breakup) * smoothstep(0.02, 0.15, s);
+}
+
+const COAT_SNOW_ALBEDO: vec3<f32> = vec3<f32>(0.86, 0.90, 0.97);
+
+// Snow's colour under `light`, the surface's own light sum (so it is dark at night and in shadow).
+fn coat_snow_color(light: vec3<f32>) -> vec3<f32> {
+    return min(COAT_SNOW_ALBEDO * light * 1.1, vec3<f32>(1.0));
+}

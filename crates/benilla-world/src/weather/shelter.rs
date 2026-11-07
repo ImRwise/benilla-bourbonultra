@@ -29,8 +29,8 @@
 //! ([`region_offset`]), so no receiver needs a new binding. The region is two header rows
 //! (`[origin_x, origin_z, 1/CELL, active]`, `[base_y, GRID, 0, 0]`) and `GRID²` words.
 //!
-//! Inert unless it is wet: with `rainSurfaces 0` or a zero wetness (`EnvFrame::wetness`) the
-//! system casts nothing, the header's `active` is 0 and every reader skips the map. It stays live
+//! Inert unless it is wet or snowy: with `rainSurfaces 0` or a zero wetness and snow cover
+//! (`EnvFrame::wetness`, `EnvFrame::snow`) the system casts nothing, the header's `active` is 0 and every reader skips the map. It stays live
 //! while the ground dries after the rain, so a porch does not turn wet when the rain stops.
 //! The precip splashes do not read the map: they already land on the topmost surface through the
 //! reference's own ground oracle (`0x67c760`), which is the right answer for a drop.
@@ -460,7 +460,7 @@ impl Default for ShelterExtract {
 
 /// Main world: follows the camera and casts this frame's columns while it is wet; idle (no rays,
 /// the header marked off once) otherwise.
-fn tick_shelter(
+pub(super) fn tick_shelter(
     frame: Res<EnvFrame>,
     cam: Query<&GlobalTransform, With<WorldCamera>>,
     spatial: SpatialQuery,
@@ -471,7 +471,8 @@ fn tick_shelter(
     mut grid: ResMut<ShelterGrid>,
     mut out: ResMut<ShelterExtract>,
 ) {
-    let wet = frame.wetness > 0.0;
+    // fork: snow keeps the map live as rain does: a unit's coat reads its roofs ([`super::coat`]).
+    let wet = frame.wetness > 0.0 || frame.snow > 0.0;
     let cam = cam.single().ok().map(GlobalTransform::translation);
     let live = wet && cam.is_some();
     if !live {
@@ -521,7 +522,7 @@ fn cast_column(
 
 /// The highest liquid surface over a Bevy XZ, as Bevy Y (WoW z): any kind, since nothing under
 /// lava or slime is rained on either.
-fn water_surface_y(
+pub(super) fn water_surface_y(
     index: &crate::liquid::WaterIndex,
     water: &Query<&crate::liquid::WaterChunkInfo>,
     xz: Vec2,
